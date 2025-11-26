@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "dist-test",
+    "rootDir": ".",
+    "module": "ES2020",
+    "moduleResolution": "node",
+    "types": ["node", "mocha", "chai"],
+    "noEmit": false
+  },
+  "include": ["src/**/*", "test/**/*.ts"]
+}
