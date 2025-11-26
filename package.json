@@ -20,10 +20,11 @@
   "scripts": {
     "clean": "rm -rf dist",
     "clean:test": "rm -rf dist-test",
-    "build": "npm run clean && tsc -p tsconfig.json",
+    "build": "npm run lint && npm run clean && tsc -p tsconfig.json",
     "dev:server": "ts-node --esm src/server/express/server.ts",
     "test:build": "npm run clean:test && tsc -p tsconfig.test.json",
     "test": "npm run test:build && mocha --timeout 10000 \"dist-test/test/**/*.test.js\"",
+    "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\"",
     "dist": "npm run build && npm run test && npm pack"
   },
   "files": [
@@ -52,6 +53,11 @@
     "@types/mocha": "^10.0.6",
     "@types/node": "^20.10.6",
     "chai": "^4.4.1",
+    "eslint": "^9.39.1",
+    "@typescript-eslint/eslint-plugin": "^8.48.0",
+    "@typescript-eslint/parser": "^8.48.0",
+    "globals": "^15.12.0",
+    "typescript-eslint": "^8.48.0",
     "express": "^4.18.2",
     "mocha": "^10.4.0",
     "ts-node": "^10.9.2",

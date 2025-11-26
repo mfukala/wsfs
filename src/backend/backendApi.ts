@@ -4,6 +4,7 @@ import {
   FileRecord,
   MissingPreconditionError,
   PersistenceAdapter,
+  type ListChangeItem,
 } from "./persistence.js";
 
 /** Raised on invalid/missing input before hitting persistence. */
@@ -18,7 +19,7 @@ export class BadRequestError extends Error {
 /** User-supplied content accepted by write-like endpoints. */
 type IncomingContent = {
   /** Raw string or Buffer for utf8 payloads. */
-  content?: any;
+  content?: unknown;
   /** Base64-encoded payload for binary content. */
   contentBase64?: string;
   /** Force decode logic (defaults to utf8 when not set). */
@@ -264,7 +265,7 @@ async function sync(
   const shouldUseIncremental =
     !!persistence.listChanges && payload.watermark !== undefined;
   let remoteUpdates: EncodedRecord[] = [];
-  let remoteMissing: string[] = [];
+  const remoteMissing: string[] = [];
   let watermark: string | null = null;
   let incrementalHandled = false;
 
@@ -404,11 +405,11 @@ async function listAllChanges(
   persistence: PersistenceAdapter,
   prefix: string,
   watermark?: string,
-): Promise<{ items: FileRecord[] | any[]; watermark: string | null; reset: boolean }> {
+): Promise<{ items: ListChangeItem[]; watermark: string | null; reset: boolean }> {
   if (!persistence.listChanges) {
     return { items: [], watermark: null, reset: true };
   }
-  const collected: any[] = [];
+  const collected: ListChangeItem[] = [];
   let cursor: string | undefined;
   let latestWatermark: string | null = null;
   do {

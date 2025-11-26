@@ -81,7 +81,7 @@ describe("wsfs client against server with memory persistence", () => {
         await client.delete("/tmp/file.txt");
       });
       await wsfs.sync();
-      expect(persistence.records.has("/tmp/file.txt")).to.be.false;
+      expect(persistence.records.has("/tmp/file.txt")).to.equal(false);
     });
 
     it("pulls remote updates and refreshes cached content", async () => {
@@ -289,7 +289,7 @@ describe("wsfs client against server with memory persistence", () => {
       expect(Buffer.compare(remote?.content ?? Buffer.alloc(0), Buffer.from(binary))).to.equal(0);
       const roundtrip = await wsfs.runReadTask((client) => client.read("/bin/blob.bin"));
       expect(roundtrip).to.be.instanceOf(Uint8Array);
-      expect(Buffer.from(roundtrip as Uint8Array).equals(Buffer.from(binary))).to.be.true;
+      expect(Buffer.from(roundtrip as Uint8Array).equals(Buffer.from(binary))).to.equal(true);
     });
 
     it("invokes codec on cached reads and writes without needing the backend", async () => {
@@ -361,7 +361,7 @@ describe("wsfs client against server with memory persistence", () => {
       });
       expect(stored?.encoding).to.equal("base64");
       expect(Buffer.from(stored?.content ?? []).equals(Buffer.from(expectedEncoded.content))).to
-        .be.true;
+        .equal(true);
       const cached = await wsfs.runReadTask((client) => client.read("/codec/secret.txt"));
       expect(cached).to.equal("top-secret");
       const remoteEncoded = await codec.encode({

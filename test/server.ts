@@ -12,12 +12,27 @@ export function createWsfsServer(options: ServerOptions): Express {
   const app = express();
   app.use(express.json({ limit: "5mb" }));
 
+  const toHttpError = (err: unknown, fallback: string) => {
+    const status =
+      err && typeof err === "object" && "status" in err && typeof err.status === "number"
+        ? err.status
+        : 500;
+    const message =
+      err instanceof Error
+        ? err.message
+        : err && typeof err === "object" && "message" in err && typeof err.message === "string"
+          ? err.message
+          : fallback;
+    return { status, message };
+  };
+
   app.post("/sync", async (req: Request, res: Response) => {
     try {
       const result = await api.sync(req.body);
       res.status(200).json(result);
-    } catch (err: any) {
-      res.status(err?.status ?? 500).json({ error: err?.message ?? "sync failed" });
+    } catch (err: unknown) {
+      const { status, message } = toHttpError(err, "sync failed");
+      res.status(status).json({ error: message });
     }
   });
 
@@ -30,8 +45,9 @@ export function createWsfsServer(options: ServerOptions): Express {
         return;
       }
       res.status(200).json(result);
-    } catch (err: any) {
-      res.status(err?.status ?? 500).json({ error: err?.message ?? "getFile failed" });
+    } catch (err: unknown) {
+      const { status, message } = toHttpError(err, "getFile failed");
+      res.status(status).json({ error: message });
     }
   });
 
@@ -44,10 +60,9 @@ export function createWsfsServer(options: ServerOptions): Express {
         return;
       }
       res.status(200).json(result);
-    } catch (err: any) {
-      res
-        .status(err?.status ?? 500)
-        .json({ error: err?.message ?? "getFileInfo failed" });
+    } catch (err: unknown) {
+      const { status, message } = toHttpError(err, "getFileInfo failed");
+      res.status(status).json({ error: message });
     }
   });
 

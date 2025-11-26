@@ -45,13 +45,25 @@ class FakePersistence implements PersistenceAdapter {
     throw new Error("delete not implemented in FakePersistence");
   }
 
-  async list(_prefix: string, _limit?: number, _cursor?: string): Promise<ListPage> {
+  async list(prefix: string, limit?: number, cursor?: string): Promise<ListPage> {
     this.listCalls += 1;
+    void prefix;
+    void limit;
+    void cursor;
     return this.pages.shift() ?? { items: [], cursor: null };
   }
 
-  async listChanges(): Promise<ListChangesPage> {
+  async listChanges(
+    prefix: string,
+    since?: string,
+    limit?: number,
+    cursor?: string,
+  ): Promise<ListChangesPage> {
     this.listChangesCalls += 1;
+    void prefix;
+    void since;
+    void limit;
+    void cursor;
     return this.changes.shift() ?? { items: [], cursor: null, watermark: null, reset: false };
   }
 }
