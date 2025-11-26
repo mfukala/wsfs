@@ -10,7 +10,7 @@ wsfs (Web Sync File System) is a browser-friendly, local-first virtual filesyste
 - Drop-in server toolkit that adapts to Express/Next.js or any framework with your own persistence adapter
 - Zero runtime dependencies; ships as `@mfukala/wsfs/client` and `@mfukala/wsfs/server`
 
-## Use cases + queries people might search
+## Sample use cases
 
 - Offline-friendly dashboards or CRMs that sync JSON blobs to an API while users travel  
   Queries: "browser offline sync indexeddb rest etag", "local first crm cache optimistic concurrency", "web app sync json files"
