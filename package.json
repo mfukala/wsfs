@@ -1,6 +1,6 @@
 {
   "name": "@mfukala/wsfs",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "wsfs: local-first virtual filesystem with IndexedDB cache and pluggable backend persistence.",
   "homepage": "https://www.npmjs.com/package/@mfukala/wsfs",
   "bugs": {
