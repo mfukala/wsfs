@@ -2,9 +2,13 @@
   "name": "@mfukala/wsfs",
   "version": "0.1.5",
   "description": "wsfs: local-first virtual filesystem with IndexedDB cache and pluggable backend persistence.",
-  "homepage": "https://www.npmjs.com/package/@mfukala/wsfs",
+  "homepage": "https://github.com/mfukala/wsfs",
   "bugs": {
     "url": "https://github.com/mfukala/wsfs/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:mfukala/wsfs.git"
   },
   "publishConfig": {
     "access": "public"
