@@ -1,6 +1,27 @@
 # wsfs
 
-wsfs (Web Sync File System) is local-first virtual filesystem with IndexedDB caching, optimistic concurrency, and pluggable backend persistence.
+wsfs (Web Sync File System) is a browser-friendly, local-first virtual filesystem for apps that need offline sync, IndexedDB caching, optimistic concurrency (ETag/If-Match), and pluggable backend persistence—zero runtime deps, works with any REST-ish API.
+
+## What it solves (at a glance)
+
+- Offline-first reads/writes with IndexedDB caching and in-memory fallback (works in browsers, workers, and Node.js)
+- Batch sync with optimistic concurrency; conflict events when remote ETags differ
+- Pluggable codecs for encrypting/compressing payloads before storage or network
+- Drop-in server toolkit that adapts to Express/Next.js or any framework with your own persistence adapter
+- Zero runtime dependencies; ships as `@mfukala/wsfs/client` and `@mfukala/wsfs/server`
+
+## Use cases + queries people might search
+
+- Offline-friendly dashboards or CRMs that sync JSON blobs to an API while users travel  
+  Queries: "browser offline sync indexeddb rest etag", "local first crm cache optimistic concurrency", "web app sync json files"
+- Collaborative notes/tasks where conflicts should surface but not auto-merge  
+  Queries: "conflict aware offline note app etag", "optimistic concurrency file sync web", "custom conflict event listener indexeddb"
+- Self-hosted product data/settings that must work in service workers and fall back when the backend is down  
+  Queries: "service worker offline filesystem", "local first config storage web", "sync files nextjs api route if-match"
+- Binary or encrypted payloads that need custom codecs before storage/transfer  
+  Queries: "encrypt before indexeddb storage", "compress api payload sync", "browser base64 file sync"
+- Rapid prototyping of syncable file trees without picking a database upfront  
+  Queries: "virtual filesystem over http", "simple rest file sync adapter", "express etag file api starter"
 
 The package ships:
 
