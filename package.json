@@ -1,6 +1,6 @@
 {
   "name": "@mfukala/wsfs",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "wsfs: local-first virtual filesystem with IndexedDB cache and pluggable backend persistence.",
   "homepage": "https://github.com/mfukala/wsfs",
   "bugs": {
