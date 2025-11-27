@@ -55,12 +55,12 @@
       "types": "./dist/index.d.ts"
     },
     "./client": {
-      "import": "./dist/client/index.js",
-      "types": "./dist/client/index.d.ts"
+      "import": "./dist/frontend/index.js",
+      "types": "./dist/frontend/index.d.ts"
     },
     "./server": {
-      "import": "./dist/server/index.js",
-      "types": "./dist/server/index.d.ts"
+      "import": "./dist/backend/index.js",
+      "types": "./dist/backend/index.d.ts"
     }
   },
   "devDependencies": {
