@@ -8,5 +8,5 @@
     "types": ["node", "mocha", "chai"],
     "noEmit": false
   },
-  "include": ["src/**/*", "test/**/*.ts"]
+  "include": ["src/**/*", "test/**/*.ts", "test/**/*.d.ts"]
 }

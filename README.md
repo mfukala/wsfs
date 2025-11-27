@@ -163,3 +163,47 @@ Reuse the same pattern for `/file`, `/file/info`, and `/list`, passing the reque
 - `DELETE /file?path=...` + `If-Match: <etag|*>`
 
 The bundled `MemoryPersistence` enforces `If-Match` (use `"*"` to create new files), tracks `updatedBy`, and exposes incremental sync via watermarks.
+
+### SQL persistence (driver-agnostic)
+
+`SqlPersistence` stays runtime-agnostic: you supply a tiny executor (`get/all/run` and optional `transaction`) plus partition binders (e.g., `user_id`, `vault_id`). Bring your own driver (SQLite/Postgres/MySQL, etc.) and wire it up:
+
+```ts
+import Database from "better-sqlite3";
+import { SqlPersistence, createWsfsApi } from "@mfukala/wsfs/server";
+
+const db = new Database(":memory:");
+// create `files` + `file_changes` tables with your partition columns
+
+const persistence = new SqlPersistence({
+  table: "files",
+  changesTable: "file_changes",
+  executor: {
+    get: (sql, params) => db.prepare(sql).get(params),
+    all: (sql, params) => db.prepare(sql).all(params),
+    run: (sql, params) => {
+      const { changes } = db.prepare(sql).run(params);
+      return { rowsAffected: changes };
+    },
+    transaction: async (fn) => {
+      db.exec("BEGIN");
+      try {
+        const result = await fn();
+        db.exec("COMMIT");
+        return result;
+      } catch (err) {
+        db.exec("ROLLBACK");
+        throw err;
+      }
+    },
+  },
+  partition: { columns: ["user_id", "vault_id"], toParams: (p) => [p.userId, p.vaultId] },
+  partitionValue: { userId: "demo", vaultId: "vault-1" },
+});
+
+const api = createWsfsApi(persistence);
+```
+
+For multi-tenant setups, call `persistence.withPartition({ userId, vaultId })` per request and pass that instance into `createWsfsApi`. Watermarks come from `file_changes.updated_at`, enabling incremental `listChanges`.
+
+Transactions are optional; omit them with drivers that require synchronous callbacks (e.g., better-sqlite3) and rely on single-statement atomicity, or supply an async-friendly transaction wrapper when your driver supports it.

@@ -1,26 +1,100 @@
 import { Buffer } from "node:buffer";
 import type { Server } from "node:http";
+import Database from "better-sqlite3";
 import { expect } from "chai";
 import { Wsfs, type ConflictEventDetail } from "../src/frontend/wsfs.js";
 import { createWsfsServer } from "./server.js";
 import { MemoryPersistence } from "../src/backend/memoryPersistence.js";
+import { SqlPersistence } from "../src/backend/sqlPersistence.js";
 import type { Codec, CodecPayload } from "../src/frontend/codec.js";
+import type { PersistenceAdapter } from "../src/backend/persistence.js";
 
 type Boot = {
   server: Server;
   baseUrl: string;
-  persistence: MemoryPersistence;
+  persistence: PersistenceAdapter;
+  cleanup?: () => void;
 };
 
-async function startTestServer(): Promise<Boot> {
-  const persistence = new MemoryPersistence();
+type Partition = { namespace: string };
+
+function createMemoryPersistence(): { persistence: PersistenceAdapter } {
+  return { persistence: new MemoryPersistence() };
+}
+
+function createSqlPersistence(): { persistence: PersistenceAdapter; cleanup: () => void } {
+  const db = new Database(":memory:");
+  db.pragma("journal_mode = WAL");
+  db.exec(`
+    CREATE TABLE files (
+      namespace TEXT NOT NULL,
+      path TEXT NOT NULL,
+      etag TEXT NOT NULL,
+      encoding TEXT NOT NULL,
+      content BLOB NOT NULL,
+      updated_by TEXT NULL,
+      updated_at INTEGER NOT NULL,
+      deleted INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY(namespace, path)
+    );
+    CREATE INDEX idx_files_namespace_path ON files(namespace, path);
+    CREATE INDEX idx_files_namespace_updated_at ON files(namespace, updated_at);
+    CREATE TABLE file_changes (
+      namespace TEXT NOT NULL,
+      path TEXT NOT NULL,
+      etag TEXT NULL,
+      encoding TEXT NULL,
+      deleted INTEGER NOT NULL,
+      updated_by TEXT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX idx_changes_namespace_updated_at ON file_changes(namespace, updated_at);
+  `);
+
+  const persistence = new SqlPersistence<Partition>({
+    table: "files",
+    changesTable: "file_changes",
+    executor: {
+      async get<T = any>(sql: string, params: unknown[]): Promise<T | undefined> {
+        return db.prepare(sql).get(params) as T | undefined;
+      },
+      async all<T = any>(sql: string, params: unknown[]): Promise<T[]> {
+        return db.prepare(sql).all(params) as T[];
+      },
+      async run(sql: string, params: unknown[]) {
+        const { changes } = db.prepare(sql).run(params);
+        return { rowsAffected: changes };
+      },
+      async transaction<T>(fn: () => Promise<T>): Promise<T> {
+        db.exec("BEGIN");
+        try {
+          const result = await fn();
+          db.exec("COMMIT");
+          return result;
+        } catch (err) {
+          db.exec("ROLLBACK");
+          throw err;
+        }
+      },
+    },
+    partition: { columns: ["namespace"], toParams: (p) => [p.namespace] },
+    partitionValue: { namespace: "test" },
+  });
+
+  return { persistence, cleanup: () => db.close() };
+}
+
+async function startTestServer(
+  factory: () => { persistence: PersistenceAdapter; cleanup?: () => void },
+): Promise<Boot> {
+  const { persistence, cleanup } = factory();
   const app = createWsfsServer({ persistence });
   const server = await new Promise<Server>((resolve) => {
     const handle = app.listen(0, "127.0.0.1", () => resolve(handle));
   });
   const port = (server.address() as { port: number }).port;
   const baseUrl = `http://127.0.0.1:${port}`;
-  return { server, baseUrl, persistence };
+  return { server, baseUrl, persistence, cleanup };
 }
 
 async function stopServer(server: Server | null): Promise<void> {
@@ -41,22 +115,37 @@ async function createClient(backendUrl: string): Promise<Wsfs> {
   });
 }
 
-describe("wsfs client against server with memory persistence", () => {
-  let server: Server | null;
-  let baseUrl: string;
-  let persistence: MemoryPersistence;
+const persistenceFactories: Array<{
+  name: string;
+  factory: () => { persistence: PersistenceAdapter; cleanup?: () => void };
+}> = [
+  { name: "memory persistence", factory: createMemoryPersistence },
+  { name: "SQL persistence", factory: createSqlPersistence },
+];
 
-  beforeEach(async () => {
-    const boot = await startTestServer();
-    server = boot.server;
-    baseUrl = boot.baseUrl;
-    persistence = boot.persistence;
-  });
+for (const { name, factory } of persistenceFactories) {
+  describe(`wsfs client against server with ${name}`, () => {
+    let server: Server | null;
+    let baseUrl: string;
+    let persistence: PersistenceAdapter;
+    let cleanup: (() => void) | undefined;
 
-  afterEach(async () => {
-    await stopServer(server);
-    server = null;
-  });
+    beforeEach(async () => {
+      const boot = await startTestServer(factory);
+      server = boot.server;
+      baseUrl = boot.baseUrl;
+      persistence = boot.persistence;
+      cleanup = boot.cleanup;
+    });
+
+    afterEach(async () => {
+      await stopServer(server);
+      server = null;
+      if (cleanup) {
+        cleanup();
+        cleanup = undefined;
+      }
+    });
 
   describe("synchronization", () => {
     it("pushes new writes to the backend", async () => {
@@ -64,9 +153,9 @@ describe("wsfs client against server with memory persistence", () => {
       await wsfs.runWriteTask(async (client) => {
         await client.write("/docs/hello.txt", "hello world");
       });
-      expect(persistence.records.size).to.equal(0);
+      expect(await persistence.read("/docs/hello.txt")).to.equal(null);
       await wsfs.sync();
-      const stored = persistence.records.get("/docs/hello.txt");
+      const stored = await persistence.read("/docs/hello.txt");
       expect(stored?.content.toString("utf8")).to.equal("hello world");
       expect(stored?.encoding).to.equal("utf8");
     });
@@ -81,7 +170,7 @@ describe("wsfs client against server with memory persistence", () => {
         await client.delete("/tmp/file.txt");
       });
       await wsfs.sync();
-      expect(persistence.records.has("/tmp/file.txt")).to.equal(false);
+      expect(await persistence.read("/tmp/file.txt")).to.equal(null);
     });
 
     it("pulls remote updates and refreshes cached content", async () => {
@@ -353,7 +442,7 @@ describe("wsfs client against server with memory persistence", () => {
       await wsfs.runWriteTaskAndSync(async (client) => {
         await client.write("/codec/secret.txt", "top-secret");
       });
-      const stored = persistence.records.get("/codec/secret.txt");
+      const stored = await persistence.read("/codec/secret.txt");
       const expectedEncoded = await codec.encode({
         path: "/codec/secret.txt",
         content: Buffer.from("top-secret", "utf8"),
@@ -380,3 +469,4 @@ describe("wsfs client against server with memory persistence", () => {
     });
   });
 });
+}

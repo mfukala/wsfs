@@ -7,6 +7,7 @@ export {
   type EncodedRecord,
 } from "./backendApi.js";
 export { MemoryPersistence } from "./memoryPersistence.js";
+export { SqlPersistence } from "./sqlPersistence.js";
 export {
   EtagMismatchError,
   MissingPreconditionError,
