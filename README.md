@@ -62,6 +62,30 @@ wsfs.addEventListener("conflict", (event) => {
 ```
 
 - Pass a `codec` (`encode`/`decode`) to encrypt/compress payloads before hitting storage or the network.
+- Use `attachAuth(kind, payload)` to inject auth headers or signed `proof` fields on each request; pair it with the server-side `authorize` hook.
+
+Attach auth headers/proofs before each request:
+
+```ts
+const signer = (input: { content: string | undefined; ifMatch?: string }) =>
+  sign(JSON.stringify(input)); // your HMAC/EdDSA signer
+
+const wsfs = await Wsfs.init({
+  namespace: "vault",
+  backendUrl: "http://localhost:8787",
+  attachAuth: (kind, payload) => {
+    payload.headers.Authorization = `Bearer ${accessToken}`;
+    if (kind === "sync") {
+      payload.body.writes?.forEach((write) => {
+        write.proof = signer({ content: write.content ?? write.contentBase64, ifMatch: write.ifMatch });
+      });
+      payload.body.deletes?.forEach((del) => {
+        del.proof = signer({ content: undefined, ifMatch: del.ifMatch });
+      });
+    }
+  },
+});
+```
 
 ## Server toolkit (`@mfukala/wsfs/server`)
 
@@ -74,44 +98,64 @@ import express from "express";
 import { createWsfsApi, MemoryPersistence } from "@mfukala/wsfs/server";
 
 const persistence = new MemoryPersistence(); // bring your own adapter in production
-const api = createWsfsApi(persistence);
+const api = createWsfsApi(persistence, {
+  authorize: (kind, { headers, body }) => {
+    // Verify auth headers/proofs before touching persistence.
+    if ((headers?.["authorization"] ?? headers?.["Authorization"]) !== "Bearer secret") {
+      const err = new Error("Unauthorized");
+      (err as Error & { status?: number }).status = 401;
+      throw err;
+    }
+    if (kind === "sync" && body && "writes" in body) {
+      // Example: verify signatures attached by the client (body.writes[].proof)
+    }
+  },
+  partition: ({ headers }) => {
+    const tenant = headers?.["x-tenant"];
+    return tenant ? { namespace: Array.isArray(tenant) ? tenant[0] : tenant } : undefined;
+  },
+});
 const app = express();
 app.use(express.json({ limit: "5mb" }));
 
 app.post("/sync", async (req, res) => {
   try {
-    res.status(200).json(await api.sync(req.body));
+    res.status(200).json(await api.sync(req.body, { headers: req.headers }));
   } catch (err: any) {
     res.status(err?.status ?? 500).json({ error: err?.message ?? "sync failed" });
   }
 });
 
 app.get("/file", async (req, res) => {
-  const file = await api.getFile(String(req.query.path ?? ""));
+  const file = await api.getFile(String(req.query.path ?? ""), { headers: req.headers });
   if (!file) return res.status(404).end();
   res.json(file);
 });
 
 app.get("/file/info", async (req, res) => {
-  const info = await api.getFileInfo(String(req.query.path ?? ""));
+  const info = await api.getFileInfo(String(req.query.path ?? ""), { headers: req.headers });
   if (!info) return res.status(404).end();
   res.json(info);
 });
 
 app.get("/list", async (req, res) => {
-  res.json(await api.list(String(req.query.prefix ?? "/")));
+  res.json(await api.list(String(req.query.prefix ?? "/"), { headers: req.headers }));
 });
 
 app.put("/file", async (req, res) => {
   try {
-    const result = await api.putFile({
-      path: req.body.path,
-      content: req.body.content,
-      contentBase64: req.body.contentBase64,
-      encoding: req.body.encoding,
-      ifMatch: req.headers["if-match"] as string | undefined,
-      updatedBy: req.body.updatedBy,
-    });
+    const result = await api.putFile(
+      {
+        path: req.body.path,
+        content: req.body.content,
+        contentBase64: req.body.contentBase64,
+        encoding: req.body.encoding,
+        ifMatch: req.headers["if-match"] as string | undefined,
+        updatedBy: req.body.updatedBy,
+        proof: req.body.proof, // arbitrary extra fields are allowed
+      },
+      { headers: req.headers },
+    );
     res.status(200).json(result);
   } catch (err: any) {
     res.status(err?.status ?? 500).json({ error: err?.message ?? "put failed" });
@@ -120,10 +164,14 @@ app.put("/file", async (req, res) => {
 
 app.delete("/file", async (req, res) => {
   try {
-    await api.deleteFile({
-      path: String(req.query.path ?? ""),
-      ifMatch: req.headers["if-match"] as string | undefined,
-    });
+    await api.deleteFile(
+      {
+        path: String(req.query.path ?? ""),
+        ifMatch: req.headers["if-match"] as string | undefined,
+        proof: req.body?.proof,
+      },
+      { headers: req.headers },
+    );
     res.status(204).end();
   } catch (err: any) {
     res.status(err?.status ?? 500).json({ error: err?.message ?? "delete failed" });
@@ -143,7 +191,7 @@ const api = createWsfsApi(new MemoryPersistence()); // swap in your adapter
 
 export default async function handler(req, res) {
   try {
-    const result = await api.sync(req.body);
+    const result = await api.sync(req.body, { headers: req.headers });
     res.status(200).json(result);
   } catch (err: any) {
     res.status(err?.status ?? 500).json({ error: err?.message ?? "sync failed" });
@@ -151,7 +199,26 @@ export default async function handler(req, res) {
 }
 ```
 
-Reuse the same pattern for `/file`, `/file/info`, and `/list`, passing the request payloads into `api.putFile`, `api.getFile`, `api.getFileInfo`, and `api.list` while preserving the `If-Match` header for writes/deletes.
+Reuse the same pattern for `/file`, `/file/info`, and `/list`, passing the request payloads into `api.putFile`, `api.getFile`, `api.getFileInfo`, and `api.list` while preserving the `If-Match` header for writes/deletes. `authorize(kind, payload)` runs before persistence and may throw with `status` (401/403/400) to block the request; `partition(ctx)` can select a tenant and falls back to the adapter’s baked-in partition when undefined.
+
+Example signature check inside `authorize`:
+
+```ts
+const api = createWsfsApi(persistence, {
+  authorize: (kind, { body }) => {
+    if (kind !== "sync") return;
+    for (const write of body.writes ?? []) {
+      verifyProof(write.proof, {
+        content: write.content ?? write.contentBase64,
+        ifMatch: write.ifMatch,
+      });
+    }
+    for (const del of body.deletes ?? []) {
+      verifyProof(del.proof, { content: undefined, ifMatch: del.ifMatch });
+    }
+  },
+});
+```
 
 ### Server endpoints the client expects
 
@@ -204,6 +271,6 @@ const persistence = new SqlPersistence({
 const api = createWsfsApi(persistence);
 ```
 
-For multi-tenant setups, call `persistence.withPartition({ userId, vaultId })` per request and pass that instance into `createWsfsApi`. Watermarks come from `file_changes.updated_at`, enabling incremental `listChanges`.
+For multi-tenant setups, keep a root adapter and let `createWsfsApi` call `persistence.withPartition(...)` via the `partition` hook (or call it yourself before wiring the API). Watermarks come from `file_changes.updated_at`, enabling incremental `listChanges`.
 
 Transactions are optional; omit them with drivers that require synchronous callbacks (e.g., better-sqlite3) and rely on single-statement atomicity, or supply an async-friendly transaction wrapper when your driver supports it.

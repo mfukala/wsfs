@@ -41,6 +41,7 @@ await wsfs.sync();
 - `info(path)` returns `{ etag, encoding, updatedBy? }` using cached metadata when available.
 - Conflicts emit a `CustomEvent<ConflictEventDetail>` on the `wsfs` instance (`detail` includes `path`, `localEtag`, `remoteEtag`, `updatedBy?`).
 - Optional `codec` lets callers transform payloads before storage/network; defaults to pass-through.
+- Optional `attachAuth(kind, payload)` can inject headers or extra body fields before each request (e.g., a signed `proof` field); the server’s `authorize` hook sees these fields.
 
 ## Sync Behavior
 
@@ -58,7 +59,7 @@ await wsfs.sync();
 - `PUT /file` + header `If-Match: <etag|*>` + body `{ path, content|contentBase64, encoding?, updatedBy? }` → `{ etag }`
 - `DELETE /file?path=...` + header `If-Match: <etag|*>`
 
-The bundled `MemoryPersistence` enforces `If-Match` (use `"*"` to create new files) and tracks `updatedBy`.
+The bundled `MemoryPersistence` enforces `If-Match` (use `"*"` to create new files) and tracks `updatedBy`. `createWsfsApi` accepts optional hooks: `authorize(kind, payload)` may throw with `status` 401/403/400 to short-circuit a request (payload includes headers/body + any custom fields like `proof`), and `partition(ctx)` can pick a tenant for `persistence.withPartition(...)` (falls back to the adapter’s default partition when undefined).
 
 ## Sync request/response shapes
 
@@ -72,9 +73,10 @@ The bundled `MemoryPersistence` enforces `If-Match` (use `"*"` to create new fil
     "contentBase64": "...",       // optional alternative for binary
     "encoding": "utf8 | base64",  // defaults to utf8
     "updatedBy": "author-id",
-    "ifMatch": "<etag or *>"
+    "ifMatch": "<etag or *>",
+    "proof": "signed payload"      // extra fields are allowed
   }],
-  "deletes": [{ "path": "/bar.txt", "ifMatch": "<etag or *>" }],
+  "deletes": [{ "path": "/bar.txt", "ifMatch": "<etag or *>", "proof": "signed tombstone" }],
   "known": [{ "path": "/existing.txt", "etag": "<last-known-etag>" }],
   "watermark": "<optional incremental cursor>"
 }

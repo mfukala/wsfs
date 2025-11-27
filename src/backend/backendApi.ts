@@ -26,6 +26,50 @@ type IncomingContent = {
   encoding?: "utf8" | "base64";
   /** Optional attribution for the writer. */
   updatedBy?: string;
+  /** Allow extra auth/proof metadata to ride along with writes. */
+  [key: string]: unknown;
+};
+
+type WritePayload = IncomingContent & {
+  path: string;
+  ifMatch?: string;
+};
+
+type DeletePayload = {
+  path: string;
+  ifMatch?: string;
+  [key: string]: unknown;
+};
+
+type RequestHeaders = Record<string, string | string[] | undefined>;
+
+type AuthorizePayload = {
+  sync: { body: SyncRequestBody; headers?: RequestHeaders };
+  putFile: { body: WritePayload; headers?: RequestHeaders };
+  deleteFile: { body: DeletePayload; headers?: RequestHeaders };
+  getFile: { path: string; headers?: RequestHeaders };
+  getFileInfo: { path: string; headers?: RequestHeaders };
+  list: { prefix: string; headers?: RequestHeaders };
+};
+
+export type AuthorizeKind = keyof AuthorizePayload;
+
+export type AuthorizeHook = <Kind extends AuthorizeKind>(
+  kind: Kind,
+  payload: AuthorizePayload[Kind],
+) => void | Promise<void>;
+
+export type PartitionSelector = <Kind extends AuthorizeKind>(
+  payload: AuthorizePayload[Kind] & { kind: Kind },
+) => unknown;
+
+export type CreateWsfsApiOptions = {
+  authorize?: AuthorizeHook;
+  partition?: PartitionSelector;
+};
+
+type RequestContext = {
+  headers?: RequestHeaders;
 };
 
 /** Canonical encoded file returned to callers. */
@@ -57,21 +101,14 @@ export type EncodedRecord = {
  */
 export interface SyncRequestBody {
   prefix?: string;
-  writes?: Array<
-    IncomingContent & {
-      path: string;
-      ifMatch?: string;
-    }
-  >;
-  deletes?: Array<{
-    path: string;
-    ifMatch?: string;
-  }>;
+  writes?: Array<WritePayload>;
+  deletes?: Array<DeletePayload>;
   known?: Array<{
     path: string;
     etag: string | undefined;
   }>;
   watermark?: string;
+  [key: string]: unknown;
 }
 
 /**
@@ -122,15 +159,16 @@ export interface WsfsBackendApi {
    *   the item returns `status` 409/412 with `remoteEtag` populated.
    * - Missing paths inside the payload are treated as `400`.
    */
-  sync(payload: SyncRequestBody): Promise<SyncResponseBody>;
+  sync(payload: SyncRequestBody, context?: RequestContext): Promise<SyncResponseBody>;
   /** Read full file contents if present. */
-  getFile(path: string): Promise<EncodedRecord | null>;
+  getFile(path: string, context?: RequestContext): Promise<EncodedRecord | null>;
   /**
    * Read metadata only (etag + encoding).
    * Returns `null` when the file is missing.
    */
   getFileInfo(
     path: string,
+    context?: RequestContext,
   ): Promise<{
     etag: string;
     encoding: "utf8" | "base64";
@@ -142,34 +180,139 @@ export interface WsfsBackendApi {
    * persistence errors (`MissingPreconditionError`, `EtagMismatchError`).
    */
   putFile(
-    input: { path: string; ifMatch?: string } & IncomingContent,
+    input: WritePayload,
+    context?: RequestContext,
   ): Promise<{ etag: string }>;
   /**
    * Delete a file with optional `ifMatch` guard.
    * Throws `BadRequestError` when `path` is absent and propagates persistence errors.
    */
-  deleteFile(input: { path: string; ifMatch?: string }): Promise<void>;
+  deleteFile(input: DeletePayload, context?: RequestContext): Promise<void>;
   /**
    * List files under a prefix (defaults to "/").
    * Returns an array of `{ path, etag, encoding }` without content.
    */
   list(
     prefix?: string,
+    context?: RequestContext,
   ): Promise<Array<Pick<FileRecord, "path" | "etag" | "encoding">>>;
 }
 
 /** Reusable core of the wsfs HTTP API, framework agnostic. */
 export function createWsfsApi(
   persistence: PersistenceAdapter,
+  options?: CreateWsfsApiOptions,
 ): WsfsBackendApi {
   return {
-    sync: (payload) => sync(persistence, payload),
-    getFile: (path) => getFile(persistence, path),
-    getFileInfo: (path) => getFileInfo(persistence, path),
-    putFile: (input) => putFile(persistence, input),
-    deleteFile: (input) => deleteFile(persistence, input),
-    list: (prefix) => list(persistence, prefix),
+    sync: (payload, context) =>
+      withHooks(
+        persistence,
+        options,
+        "sync",
+        { body: payload, headers: context?.headers },
+        (scoped) => sync(scoped, payload),
+      ),
+    getFile: (path, context) =>
+      withHooks(
+        persistence,
+        options,
+        "getFile",
+        { path, headers: context?.headers },
+        (scoped) => getFile(scoped, path),
+      ),
+    getFileInfo: (path, context) =>
+      withHooks(
+        persistence,
+        options,
+        "getFileInfo",
+        { path, headers: context?.headers },
+        (scoped) => getFileInfo(scoped, path),
+      ),
+    putFile: (input, context) =>
+      withHooks(
+        persistence,
+        options,
+        "putFile",
+        { body: input, headers: context?.headers },
+        (scoped) => putFile(scoped, input),
+      ),
+    deleteFile: (input, context) =>
+      withHooks(
+        persistence,
+        options,
+        "deleteFile",
+        { body: input, headers: context?.headers },
+        (scoped) => deleteFile(scoped, input),
+      ),
+    list: (prefix, context) =>
+      withHooks(
+        persistence,
+        options,
+        "list",
+        { prefix: prefix ?? "/", headers: context?.headers },
+        (scoped) => list(scoped, prefix),
+      ),
   };
+}
+
+type PartitionablePersistence = PersistenceAdapter & {
+  withPartition(partition: unknown): PersistenceAdapter;
+};
+
+function hasPartition(
+  adapter: PersistenceAdapter,
+): adapter is PartitionablePersistence {
+  return typeof (adapter as PartitionablePersistence).withPartition === "function";
+}
+
+async function withHooks<Kind extends AuthorizeKind, Result>(
+  persistence: PersistenceAdapter,
+  options: CreateWsfsApiOptions | undefined,
+  kind: Kind,
+  payload: AuthorizePayload[Kind],
+  action: (scoped: PersistenceAdapter) => Promise<Result>,
+): Promise<Result> {
+  if (options?.authorize) {
+    try {
+      await options.authorize(kind, payload);
+    } catch (err: unknown) {
+      throw toAuthError(err);
+    }
+  }
+  const partitionValue = options?.partition?.({ ...payload, kind } as AuthorizePayload[Kind] & {
+    kind: Kind;
+  });
+  const scoped =
+    partitionValue !== undefined && hasPartition(persistence)
+      ? persistence.withPartition(partitionValue)
+      : persistence;
+  return action(scoped);
+}
+
+function toAuthError(err: unknown): Error & { status: number } {
+  if (
+    err &&
+    typeof err === "object" &&
+    "status" in err &&
+    typeof (err as { status?: unknown }).status === "number"
+  ) {
+    const status = normalizeStatus((err as { status: number }).status);
+    (err as { status: number }).status = status;
+    return err as Error & { status: number };
+  }
+  const message =
+    err instanceof Error
+      ? err.message
+      : typeof err === "string"
+        ? err
+        : "Unauthorized";
+  const error = new Error(message) as Error & { status: number };
+  error.status = 401;
+  return error;
+}
+
+function normalizeStatus(status: number): number {
+  return status === 400 || status === 401 || status === 403 ? status : 401;
 }
 
 async function sync(
@@ -351,7 +494,7 @@ async function getFileInfo(
 
 async function putFile(
   persistence: PersistenceAdapter,
-  input: { path: string; ifMatch?: string } & IncomingContent,
+  input: WritePayload,
 ): Promise<{ etag: string }> {
   const { path: targetPath } = input;
   if (!targetPath) {
@@ -371,7 +514,7 @@ async function putFile(
 
 async function deleteFile(
   persistence: PersistenceAdapter,
-  input: { path: string; ifMatch?: string },
+  input: DeletePayload,
 ): Promise<void> {
   const { path: targetPath } = input;
   if (!targetPath) {

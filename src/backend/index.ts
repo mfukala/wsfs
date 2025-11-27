@@ -5,6 +5,10 @@ export {
   type SyncRequestBody,
   type SyncResponseBody,
   type EncodedRecord,
+  type AuthorizeHook,
+  type AuthorizeKind,
+  type CreateWsfsApiOptions,
+  type PartitionSelector,
 } from "./backendApi.js";
 export { MemoryPersistence } from "./memoryPersistence.js";
 export { SqlPersistence } from "./sqlPersistence.js";

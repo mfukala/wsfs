@@ -6,6 +6,7 @@ import { Wsfs, type ConflictEventDetail } from "../src/frontend/wsfs.js";
 import { createWsfsServer } from "./server.js";
 import { MemoryPersistence } from "../src/backend/memoryPersistence.js";
 import { SqlPersistence } from "../src/backend/sqlPersistence.js";
+import type { AuthorizeHook, PartitionSelector } from "../src/backend/backendApi.js";
 import type { Codec, CodecPayload } from "../src/frontend/codec.js";
 import type { PersistenceAdapter } from "../src/backend/persistence.js";
 
@@ -86,9 +87,14 @@ function createSqlPersistence(): { persistence: PersistenceAdapter; cleanup: () 
 
 async function startTestServer(
   factory: () => { persistence: PersistenceAdapter; cleanup?: () => void },
+  options?: { authorize?: AuthorizeHook; partition?: PartitionSelector },
 ): Promise<Boot> {
   const { persistence, cleanup } = factory();
-  const app = createWsfsServer({ persistence });
+  const app = createWsfsServer({
+    persistence,
+    authorize: options?.authorize,
+    partition: options?.partition,
+  });
   const server = await new Promise<Server>((resolve) => {
     const handle = app.listen(0, "127.0.0.1", () => resolve(handle));
   });
@@ -122,6 +128,103 @@ const persistenceFactories: Array<{
   { name: "memory persistence", factory: createMemoryPersistence },
   { name: "SQL persistence", factory: createSqlPersistence },
 ];
+
+describe("auth + partition hooks", () => {
+  it("blocks sync when authorize rejects the request", async () => {
+    const boot = await startTestServer(createMemoryPersistence, {
+      authorize: (kind) => {
+        if (kind === "sync") {
+          const err = new Error("bad proof");
+          (err as Error & { status?: number }).status = 403;
+          throw err;
+        }
+      },
+    });
+    try {
+      const response = await fetch(`${boot.baseUrl}/sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prefix: "/", known: [] }),
+      });
+      expect(response.status).to.equal(403);
+      const payload = (await response.json()) as { error: string };
+      expect(payload.error).to.match(/bad proof/);
+    } finally {
+      await stopServer(boot.server);
+      boot.cleanup?.();
+    }
+  });
+
+  it("passes attachAuth headers and payload fields through to authorize", async () => {
+    const seen: Array<{ headers?: unknown; body?: unknown }> = [];
+    const boot = await startTestServer(createMemoryPersistence, {
+      authorize: (kind, payload) => {
+        if (kind === "sync") {
+          const syncPayload = payload as { headers?: unknown; body?: unknown };
+          seen.push({ headers: syncPayload.headers, body: syncPayload.body });
+        }
+      },
+    });
+    const wsfs = await Wsfs.init({
+      namespace: uniqueNamespace(),
+      backendUrl: boot.baseUrl,
+      attachAuth: (kind, payload) => {
+        payload.headers["x-proof"] = "header-token";
+        if (kind === "sync") {
+          const syncPayload = payload as { body: { writes?: Array<Record<string, unknown>> } };
+          syncPayload.body.writes?.forEach((write) => {
+            (write as Record<string, unknown>).proof = `proof-${write.path as string}`;
+          });
+        }
+      },
+    });
+    try {
+      await wsfs.runWriteTask(async (client) => {
+        await client.write("/secure/a.txt", "secret");
+      });
+      await wsfs.sync();
+      expect(seen).to.have.length(1);
+      const record = seen[0];
+      expect((record?.headers as Record<string, unknown>)?.["x-proof"]).to.equal("header-token");
+      const writes = (record?.body as { writes?: Array<Record<string, unknown>> } | undefined)?.writes;
+      expect(writes?.[0]?.proof).to.equal("proof-/secure/a.txt");
+    } finally {
+      await stopServer(boot.server);
+      boot.cleanup?.();
+    }
+  });
+
+  it("selects partitions via the partition hook", async () => {
+    const boot = await startTestServer(createSqlPersistence, {
+      partition: (ctx) => {
+        const header = ctx.headers?.["x-namespace"];
+        const namespace = Array.isArray(header) ? header[0] : header;
+        return namespace ? { namespace } : undefined;
+      },
+    });
+    const wsfs = await Wsfs.init({
+      namespace: uniqueNamespace(),
+      backendUrl: boot.baseUrl,
+      attachAuth: (_kind, payload) => {
+        payload.headers["x-namespace"] = "tenant-b";
+      },
+    });
+    try {
+      await wsfs.runWriteTask(async (client) => {
+        await client.write("/partitioned/file.txt", "scoped");
+      });
+      await wsfs.sync();
+      const sql = boot.persistence as SqlPersistence<Partition>;
+      const tenantScoped = sql.withPartition({ namespace: "tenant-b" });
+      const defaultScoped = sql.withPartition({ namespace: "test" });
+      expect(await tenantScoped.read("/partitioned/file.txt")).to.not.equal(null);
+      expect(await defaultScoped.read("/partitioned/file.txt")).to.equal(null);
+    } finally {
+      await stopServer(boot.server);
+      boot.cleanup?.();
+    }
+  });
+});
 
 for (const { name, factory } of persistenceFactories) {
   describe(`wsfs client against server with ${name}`, () => {

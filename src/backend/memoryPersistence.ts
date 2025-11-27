@@ -27,11 +27,14 @@ export class MemoryPersistence implements PersistenceAdapter {
    * listChanges can emit tombstones.
    */
   private changes: Map<string, ChangeMeta>;
+  /** Optional partition registry shared across clones. */
+  private partitionStores?: Map<string, MemoryPersistence>;
 
-  constructor() {
+  constructor(partitionStores?: Map<string, MemoryPersistence>) {
     this.records = new Map();
     this.watermarkCounter = 0;
     this.changes = new Map();
+    this.partitionStores = partitionStores;
   }
 
   async read(targetPath: string): Promise<FileRecord | null> {
@@ -198,6 +201,21 @@ export class MemoryPersistence implements PersistenceAdapter {
 
   async getWatermark(): Promise<string | null> {
     return String(this.watermarkCounter);
+  }
+
+  withPartition(partition: unknown): MemoryPersistence {
+    if (!this.partitionStores) {
+      this.partitionStores = new Map();
+      this.partitionStores.set("__root__", this);
+    }
+    const key = JSON.stringify(partition ?? "__default__");
+    const existing = this.partitionStores.get(key);
+    if (existing) {
+      return existing;
+    }
+    const scoped = new MemoryPersistence(this.partitionStores);
+    this.partitionStores.set(key, scoped);
+    return scoped;
   }
 
   private computeEtag(content: Buffer): string {

@@ -9,7 +9,62 @@ export interface WsfsOptions {
   backendUrl: string;
   /** Optional codec hook for encrypting/compressing payloads. */
   codec?: Codec;
+  /**
+   * Optional hook to attach auth headers/proof payloads to outbound requests.
+   * Called for sync/read/list operations before the fetch is dispatched.
+   */
+  attachAuth?: AttachAuth;
 }
+
+type SyncWritePayload = {
+  path: string;
+  ifMatch?: string;
+  content?: string;
+  contentBase64?: string;
+  encoding?: "utf8" | "base64";
+  updatedBy?: string;
+  [key: string]: unknown;
+};
+
+type SyncDeletePayload = {
+  path: string;
+  ifMatch?: string;
+  [key: string]: unknown;
+};
+
+type SyncRequestPayload = {
+  prefix: string;
+  writes?: SyncWritePayload[];
+  deletes?: SyncDeletePayload[];
+  known?: Array<{
+    path: string;
+    etag: string | undefined;
+  }>;
+  watermark?: string;
+  [key: string]: unknown;
+};
+
+type AttachAuthKind =
+  | "sync"
+  | "getFile"
+  | "getFileInfo"
+  | "putFile"
+  | "deleteFile"
+  | "list";
+
+type AttachAuthPayloadMap = {
+  sync: { headers: Record<string, string>; body: SyncRequestPayload };
+  getFile: { headers: Record<string, string>; path: string };
+  getFileInfo: { headers: Record<string, string>; path: string };
+  putFile: { headers: Record<string, string>; body: SyncWritePayload };
+  deleteFile: { headers: Record<string, string>; body: SyncDeletePayload };
+  list: { headers: Record<string, string>; prefix: string };
+};
+
+export type AttachAuth = <Kind extends AttachAuthKind>(
+  kind: Kind,
+  payload: AttachAuthPayloadMap[Kind],
+) => void | Partial<AttachAuthPayloadMap[Kind]> | Promise<void | Partial<AttachAuthPayloadMap[Kind]>>;
 
 /** Result entry from listing a directory prefix. */
 export interface ListEntry {
@@ -91,6 +146,7 @@ export class Wsfs extends EventTarget {
   private readonly backendUrl: string;
   private readonly store: LocalStore;
   private readonly codec: Codec;
+  private readonly attachAuth?: AttachAuth;
   private readonly textEncoder: TextEncoder;
   private readonly textDecoder: TextDecoder;
   private readonly lock: ReadWriteLock;
@@ -103,6 +159,7 @@ export class Wsfs extends EventTarget {
     this.namespace = options.namespace;
     this.backendUrl = options.backendUrl;
     this.codec = options.codec ?? identityCodec;
+    this.attachAuth = options.attachAuth;
     this.store = store;
   }
 
@@ -203,8 +260,11 @@ export class Wsfs extends EventTarget {
     if (local && !local.deleted && local.encoding) {
       return { etag: local.etag, encoding: local.encoding, updatedBy: local.updatedBy };
     }
+    const headers: Record<string, string> = {};
+    await this.applyAttachAuth("getFileInfo", { headers, path: normalized });
     const response = await this.backendFetch(
       `/file/info?path=${encodeURIComponent(normalized)}`,
+      { headers },
     );
     if (response.status === 404) {
       throw new Error(`File not found: ${normalized}`);
@@ -237,26 +297,30 @@ export class Wsfs extends EventTarget {
       (entry) => !entry.deleted && !entry.dirty,
     );
     const watermark = await this.store.getWatermark(normalized);
+    const request: SyncRequestPayload = {
+      prefix: normalized,
+      writes: writes.map((entry) => ({
+        path: entry.path,
+        ...this.encodeContent(entry.content),
+        ifMatch: entry.etag ?? "*",
+      })),
+      deletes: deletes.map((entry) => ({
+        path: entry.path,
+        ifMatch: entry.etag ?? "*",
+      })),
+      known: knownClean.map((entry) => ({
+        path: entry.path,
+        etag: entry.etag,
+      })),
+      watermark: watermark ?? undefined,
+    };
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    await this.applyAttachAuth("sync", { headers, body: request });
+    headers["Content-Type"] ??= "application/json";
     const response = await this.backendFetch("/sync", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        prefix: normalized,
-        writes: writes.map((entry) => ({
-          path: entry.path,
-          ...this.encodeContent(entry.content),
-          ifMatch: entry.etag ?? "*",
-        })),
-        deletes: deletes.map((entry) => ({
-          path: entry.path,
-          ifMatch: entry.etag ?? "*",
-        })),
-        known: knownClean.map((entry) => ({
-          path: entry.path,
-          etag: entry.etag,
-        })),
-        watermark: watermark ?? undefined,
-      }),
+      headers,
+      body: JSON.stringify(request),
     });
     if (!response.ok) {
       throw new Error(`Failed to sync (${response.status})`);
@@ -278,7 +342,9 @@ export class Wsfs extends EventTarget {
   private async fetchFile(
     path: string,
   ): Promise<{ etag: string; updatedBy?: string; content: string | Uint8Array; encoding: "utf8" | "base64" } | null> {
-    const response = await this.backendFetch(`/file?path=${encodeURIComponent(path)}`);
+    const headers: Record<string, string> = {};
+    await this.applyAttachAuth("getFile", { headers, path });
+    const response = await this.backendFetch(`/file?path=${encodeURIComponent(path)}`, { headers });
     if (response.status === 404) {
       return null;
     }
@@ -513,6 +579,25 @@ export class Wsfs extends EventTarget {
   private async backendFetch(url: string, init?: RequestInit): Promise<Response> {
     const fullUrl = `${this.backendUrl}${url}`;
     return await fetch(fullUrl, init);
+  }
+
+  private async applyAttachAuth<Kind extends AttachAuthKind>(
+    kind: Kind,
+    payload: AttachAuthPayloadMap[Kind],
+  ): Promise<void> {
+    if (!this.attachAuth) {
+      return;
+    }
+    const result = await this.attachAuth(kind, payload);
+    if (!result) {
+      return;
+    }
+    if ("headers" in result && result.headers) {
+      payload.headers = { ...payload.headers, ...result.headers };
+    }
+    if ("body" in result && "body" in payload && result.body !== undefined) {
+      (payload as { body: unknown }).body = result.body as (typeof payload)["body"];
+    }
   }
 
   /**
