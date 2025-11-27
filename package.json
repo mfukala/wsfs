@@ -42,7 +42,7 @@
     "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\"",
     "dist": "npm run build && npm run test && npm pack",
     "increase-version": "npm test && npm version patch -m \"Release v%s\"",
-    "publish": "npm run increase-version && git push && git push --tags"
+    "release": "npm run increase-version && git push && git push --tags"
   },
   "files": [
     "dist",
