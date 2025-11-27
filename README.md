@@ -4,10 +4,11 @@ wsfs (Web Sync File System) is a browser-friendly, local-first virtual filesyste
 
 ## What it solves (at a glance)
 
-- Offline-first reads/writes with IndexedDB caching and in-memory fallback (works in browsers, workers, and Node.js)
-- Batch sync with optimistic concurrency; conflict events when remote ETags differ
-- Pluggable codecs for encrypting/compressing payloads before storage or network
-- Drop-in server toolkit that adapts to Express/Next.js or any framework with your own persistence adapter
+- Offline-first reads/writes with IndexedDB caching and an in-memory fallback (runs in browsers, workers, and Node.js)
+- Incremental sync with watermarks + bulk reads to avoid walking the full tree; conflict events when remote ETags differ
+- Auth + partition hooks to pass proof headers/body fields through to `authorize` and route multi-tenant traffic to the right adapter
+- Pluggable codecs to encrypt/compress payloads before storage or the network; binary payloads travel as base64
+- Server toolkit with memory + driver-agnostic SQL persistence, pluggable into Express/Next.js or any framework
 - Zero runtime dependencies; ships as `@mfukala/wsfs/client` and `@mfukala/wsfs/server`
 
 ## Sample use cases
