@@ -11,9 +11,9 @@ import {
 
 type SqlExecutor = {
   /** Fetch a single row or undefined. */
-  get<T = any>(sql: string, params: unknown[]): Promise<T | undefined>;
+  get<T = unknown>(sql: string, params: unknown[]): Promise<T | undefined>;
   /** Fetch all rows. */
-  all<T = any>(sql: string, params: unknown[]): Promise<T[]>;
+  all<T = unknown>(sql: string, params: unknown[]): Promise<T[]>;
   /** Run a mutation. Return rowsAffected when available. */
   run(
     sql: string,

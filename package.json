@@ -38,7 +38,7 @@
     "build": "npm run lint && npm run clean && tsc -p tsconfig.json",
     "dev:server": "ts-node --esm src/server/express/server.ts",
     "test:build": "npm run clean:test && tsc -p tsconfig.test.json",
-    "test": "npm run test:build && mocha --timeout 10000 \"dist-test/test/**/*.test.js\"",
+    "test": "npm run lint && npm run test:build && mocha --timeout 10000 \"dist-test/test/**/*.test.js\"",
     "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\"",
     "dist": "npm run build && npm run test && npm pack"
   },

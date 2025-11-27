@@ -55,10 +55,10 @@ function createSqlPersistence(): { persistence: PersistenceAdapter; cleanup: () 
     table: "files",
     changesTable: "file_changes",
     executor: {
-      async get<T = any>(sql: string, params: unknown[]): Promise<T | undefined> {
+      async get<T = unknown>(sql: string, params: unknown[]): Promise<T | undefined> {
         return db.prepare(sql).get(params) as T | undefined;
       },
-      async all<T = any>(sql: string, params: unknown[]): Promise<T[]> {
+      async all<T = unknown>(sql: string, params: unknown[]): Promise<T[]> {
         return db.prepare(sql).all(params) as T[];
       },
       async run(sql: string, params: unknown[]) {

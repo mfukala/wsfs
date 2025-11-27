@@ -42,10 +42,10 @@ function makeDb(): BetterSqliteDatabase {
 
 function makeExecutor(db: BetterSqliteDatabase) {
   return {
-    async get<T = any>(sql: string, params: unknown[]): Promise<T | undefined> {
+    async get<T = unknown>(sql: string, params: unknown[]): Promise<T | undefined> {
       return db.prepare(sql).get(params) as T | undefined;
     },
-    async all<T = any>(sql: string, params: unknown[]): Promise<T[]> {
+    async all<T = unknown>(sql: string, params: unknown[]): Promise<T[]> {
       return db.prepare(sql).all(params) as T[];
     },
     async run(sql: string, params: unknown[]): Promise<{ rowsAffected: number }> {
@@ -74,7 +74,10 @@ function makeAdapter(
   });
 }
 
-async function expectError(fn: () => Promise<unknown>, ctor: new (...args: any[]) => Error) {
+async function expectError(
+  fn: () => Promise<unknown>,
+  ctor: new (message?: string) => Error,
+): Promise<void> {
   try {
     await fn();
     expect.fail("Expected error to be thrown");
@@ -88,10 +91,7 @@ describe("SqlPersistence (better-sqlite3)", () => {
     const db = makeDb();
     const adapter = makeAdapter(db, "alpha");
 
-    await expectError(
-      () => adapter.write("/missing.txt", "fail", { ifMatch: undefined as any }),
-      MissingPreconditionError,
-    );
+    await expectError(() => adapter.write("/missing.txt", "fail", { ifMatch: undefined }), MissingPreconditionError);
 
     await expectError(
       () => adapter.write("/missing.txt", "fail", { ifMatch: "etag-1" }),
@@ -147,8 +147,8 @@ describe("SqlPersistence (better-sqlite3)", () => {
     const db = makeDb();
     const adapter = makeAdapter(db, "alpha", 10); // deterministic clock
 
-    const created = await adapter.write("/item.txt", "v1", { ifMatch: "*" });
-    const updated = await adapter.write("/item.txt", "v2", { ifMatch: created.etag });
+    const first = await adapter.write("/item.txt", "v1", { ifMatch: "*" });
+    const updated = await adapter.write("/item.txt", "v2", { ifMatch: first.etag });
     await adapter.delete("/item.txt", { ifMatch: updated.etag });
 
     const allChanges = await adapter.listChanges("/");
@@ -168,7 +168,7 @@ describe("SqlPersistence (better-sqlite3)", () => {
     const alpha = makeAdapter(db, "alpha");
     const beta = alpha.withPartition("beta");
 
-    const created = await alpha.write("/shared.txt", "hello", { ifMatch: "*" });
+    await alpha.write("/shared.txt", "hello", { ifMatch: "*" });
     expect(await beta.read("/shared.txt")).to.equal(null);
 
     const alphaChanges = await alpha.listChanges("/");
