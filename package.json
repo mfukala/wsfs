@@ -2,6 +2,21 @@
   "name": "@mfukala/wsfs",
   "version": "0.1.7",
   "description": "wsfs: local-first virtual filesystem with IndexedDB cache and pluggable backend persistence.",
+  "keywords": [
+    "local-first",
+    "offline-first",
+    "virtual filesystem",
+    "indexeddb",
+    "offline sync",
+    "file sync",
+    "optimistic concurrency",
+    "etag",
+    "rest api",
+    "browser storage",
+    "service worker",
+    "transactional",
+    "filesystem abstraction"
+  ],
   "homepage": "https://github.com/mfukala/wsfs",
   "bugs": {
     "url": "https://github.com/mfukala/wsfs/issues"
