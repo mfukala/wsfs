@@ -211,6 +211,9 @@ export class Wsfs extends EventTarget {
     const existing = await this.store.get(normalized);
     /** Queue the change locally; sync will push it with optimistic etag check. */
     const encoded = await this.encodeForStore(normalized, content);
+    if (this.hasSameContent(existing, encoded)) {
+      return;
+    }
     await this.store.put({
       path: normalized,
       content: encoded.content,
@@ -523,6 +526,32 @@ export class Wsfs extends EventTarget {
       return this.textEncoder.encode(entry.content);
     }
     return this.asUint8Array(entry.content);
+  }
+
+  private hasSameContent(
+    existing: LocalEntry | null,
+    next: StorePayload,
+  ): boolean {
+    if (!existing || existing.deleted || existing.content === undefined) {
+      return false;
+    }
+    const existingEncoding =
+      existing.encoding ??
+      (typeof existing.content === "string" ? "utf8" : "base64");
+    if (existingEncoding !== next.encoding) {
+      return false;
+    }
+    const current = this.materializeContent(existing, existingEncoding);
+    const incoming = this.materializeContent({ content: next.content }, next.encoding);
+    if (current.length !== incoming.length) {
+      return false;
+    }
+    for (let i = 0; i < current.length; i += 1) {
+      if (current[i] !== incoming[i]) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private asUint8Array(input: ArrayBufferView | ArrayBuffer): Uint8Array {

@@ -263,6 +263,33 @@ for (const { name, factory } of persistenceFactories) {
       expect(stored?.encoding).to.equal("utf8");
     });
 
+    it("avoids syncing when a write matches existing content", async () => {
+      const seeded = await persistence.write("/docs/static.txt", "same", {
+        ifMatch: "*",
+        encoding: "utf8",
+      });
+      const writesSeen: Array<Array<unknown> | undefined> = [];
+      const wsfs = await Wsfs.init({
+        namespace: uniqueNamespace(),
+        backendUrl: baseUrl,
+        attachAuth: (kind, payload) => {
+          if (kind !== "sync") return;
+          const body = (payload as { body?: { writes?: unknown[] } }).body;
+          writesSeen.push(body?.writes ? [...body.writes] : undefined);
+        },
+      });
+      await wsfs.runReadTask((client) => client.read("/docs/static.txt"));
+      await wsfs.runWriteTask(async (client) => {
+        await client.write("/docs/static.txt", "same");
+      });
+      await wsfs.sync();
+      expect(writesSeen).to.have.lengthOf(1);
+      expect(writesSeen[0] ?? []).to.have.lengthOf(0);
+      const remote = await persistence.read("/docs/static.txt");
+      expect(remote?.etag).to.equal(seeded.etag);
+      expect(remote?.content.toString("utf8")).to.equal("same");
+    });
+
     it("propagates deletes to the backend", async () => {
       const wsfs = await createClient(baseUrl);
       await wsfs.runWriteTask(async (client) => {
