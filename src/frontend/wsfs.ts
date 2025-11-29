@@ -76,6 +76,8 @@ export interface ListEntry {
   encoding?: "utf8" | "base64";
   /** Optional author metadata */
   updatedBy?: string;
+  /** True when awaiting push to the backend */
+  dirty: boolean;
 }
 
 /** Payload emitted on optimistic concurrency conflicts. */
@@ -95,7 +97,12 @@ export interface ReadTaskClient {
   list(prefix?: string): Promise<ListEntry[]>;
   info(
     path: string,
-  ): Promise<{ etag: string | undefined; encoding: "utf8" | "base64"; updatedBy?: string }>;
+  ): Promise<{
+    etag: string | undefined;
+    encoding: "utf8" | "base64";
+    updatedBy?: string;
+    dirty: boolean;
+  }>;
 }
 
 /** Operations available inside a write task. */
@@ -250,18 +257,29 @@ export class Wsfs extends EventTarget {
         etag: entry.etag,
         encoding: entry.encoding,
         updatedBy: entry.updatedBy,
+        dirty: !!entry.dirty,
       }));
   }
 
   private async info(
     path: string,
     guard: TaskGuard,
-  ): Promise<{ etag: string | undefined; encoding: "utf8" | "base64"; updatedBy?: string }> {
+  ): Promise<{
+    etag: string | undefined;
+    encoding: "utf8" | "base64";
+    updatedBy?: string;
+    dirty: boolean;
+  }> {
     this.assertTaskGuard(guard, false);
     const normalized = this.normalizePath(path);
     const local = await this.store.get(normalized);
     if (local && !local.deleted && local.encoding) {
-      return { etag: local.etag, encoding: local.encoding, updatedBy: local.updatedBy };
+      return {
+        etag: local.etag,
+        encoding: local.encoding,
+        updatedBy: local.updatedBy,
+        dirty: !!local.dirty,
+      };
     }
     const headers: Record<string, string> = {};
     await this.applyAttachAuth("getFileInfo", { headers, path: normalized });
@@ -288,7 +306,10 @@ export class Wsfs extends EventTarget {
       dirty: false,
       deleted: false,
     });
-    return payload;
+    return {
+      ...payload,
+      dirty: false,
+    };
   }
 
   async sync(prefix = "/"): Promise<void> {

@@ -364,6 +364,7 @@ for (const { name, factory } of persistenceFactories) {
         etag: remote.etag,
         encoding: "base64",
         updatedBy: "remote-user",
+        dirty: false,
       });
       await stopServer(server);
       server = null;
@@ -372,6 +373,7 @@ for (const { name, factory } of persistenceFactories) {
         etag: remote.etag,
         encoding: "base64",
         updatedBy: "remote-user",
+        dirty: false,
       });
     });
 
@@ -391,6 +393,7 @@ for (const { name, factory } of persistenceFactories) {
         etag: remote.etag,
         encoding: "utf8",
         updatedBy: "author-a",
+        dirty: false,
       });
     });
   });
@@ -493,6 +496,23 @@ for (const { name, factory } of persistenceFactories) {
       const entries = await wsfs.runReadTask((client) => client.list("/list"));
       const names = entries.map((e) => e.path);
       expect(names).to.deep.equal(["/list/a.txt"]);
+    });
+
+    it("exposes dirty flag status in list and info responses", async () => {
+      const wsfs = await createClient(baseUrl);
+      await wsfs.runWriteTask(async (client) => {
+        await client.write("/flags/dirty.txt", "local");
+      });
+      const listEntries = await wsfs.runReadTask((client) => client.list("/flags"));
+      expect(listEntries).to.have.lengthOf(1);
+      expect(listEntries[0].dirty).to.equal(true);
+      const dirtyInfo = await wsfs.runReadTask((client) => client.info("/flags/dirty.txt"));
+      expect(dirtyInfo.dirty).to.equal(true);
+      await wsfs.sync();
+      const cleanInfo = await wsfs.runReadTask((client) => client.info("/flags/dirty.txt"));
+      expect(cleanInfo.dirty).to.equal(false);
+      const cleanEntries = await wsfs.runReadTask((client) => client.list("/flags"));
+      expect(cleanEntries[0].dirty).to.equal(false);
     });
   });
 
