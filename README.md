@@ -53,7 +53,7 @@ await wsfs.sync();
 ```
 
 - `runWriteTaskAndSync` keeps the write lock through the sync; local edits rollback only if the task throws, not if sync fails.
-- `list(prefix?)` hides local tombstones; `info(path)` returns `{ etag, encoding, updatedBy? }`. Use `readMany(paths)` / `infoMany(paths)` inside read tasks to fetch multiple files/metadata in one round-trip and cache the results.
+- `list(prefix?)` hides local tombstones; `info(path)` returns `{ etag, encoding, updatedBy? }`. Use `readMany(paths)` / `infoMany(paths)` inside read tasks to fetch multiple files/metadata in one round-trip and cache the results—missing entries resolve to `null` instead of throwing.
 - Conflicts surface via a `conflict` event:
 
 ```ts

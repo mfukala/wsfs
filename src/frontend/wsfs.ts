@@ -98,7 +98,7 @@ export interface ConflictEventDetail {
 /** Operations available inside a read task. */
 export interface ReadTaskClient {
   read(path: string): Promise<string | Uint8Array>;
-  readMany(paths: string[]): Promise<Array<string | Uint8Array>>;
+  readMany(paths: string[]): Promise<Array<string | Uint8Array | null>>;
   list(prefix?: string): Promise<ListEntry[]>;
   info(
     path: string,
@@ -111,12 +111,15 @@ export interface ReadTaskClient {
   infoMany(
     paths: string[],
   ): Promise<
-    Array<{
-      etag: string | undefined;
-      encoding: "utf8" | "base64";
-      updatedBy?: string;
-      dirty: boolean;
-    }>
+    Array<
+      | {
+          etag: string | undefined;
+          encoding: "utf8" | "base64";
+          updatedBy?: string;
+          dirty: boolean;
+        }
+      | null
+    >
   >;
 }
 
@@ -226,14 +229,14 @@ export class Wsfs extends EventTarget {
   private async readMany(
     paths: string[],
     guard: TaskGuard,
-  ): Promise<Array<string | Uint8Array>> {
+  ): Promise<Array<string | Uint8Array | null>> {
     this.assertTaskGuard(guard, false);
     if (!paths.length) {
       return [];
     }
     const normalized = paths.map((path) => this.normalizePath(path));
     const entries = await Promise.all(normalized.map((path) => this.store.get(path)));
-    const results: Array<string | Uint8Array> = new Array(normalized.length);
+    const results: Array<string | Uint8Array | null> = new Array(normalized.length);
     const missing: Array<{ path: string; index: number }> = [];
     for (let i = 0; i < normalized.length; i += 1) {
       const entry = entries[i];
@@ -248,7 +251,8 @@ export class Wsfs extends EventTarget {
       for (let i = 0; i < missing.length; i += 1) {
         const record = remote[i];
         if (!record) {
-          throw new Error(`File not found: ${missing[i]!.path}`);
+          results[missing[i]!.index] = null;
+          continue;
         }
         const decoded = this.decodeRemoteContent(record);
         await this.store.put({
@@ -374,12 +378,15 @@ export class Wsfs extends EventTarget {
     paths: string[],
     guard: TaskGuard,
   ): Promise<
-    Array<{
-      etag: string | undefined;
-      encoding: "utf8" | "base64";
-      updatedBy?: string;
-      dirty: boolean;
-    }>
+    Array<
+      | {
+          etag: string | undefined;
+          encoding: "utf8" | "base64";
+          updatedBy?: string;
+          dirty: boolean;
+        }
+      | null
+    >
   > {
     this.assertTaskGuard(guard, false);
     if (!paths.length) {
@@ -387,12 +394,15 @@ export class Wsfs extends EventTarget {
     }
     const normalized = paths.map((path) => this.normalizePath(path));
     const entries = await Promise.all(normalized.map((path) => this.store.get(path)));
-    const results: Array<{
-      etag: string | undefined;
-      encoding: "utf8" | "base64";
-      updatedBy?: string;
-      dirty: boolean;
-    }> = new Array(normalized.length);
+    const results: Array<
+      | {
+          etag: string | undefined;
+          encoding: "utf8" | "base64";
+          updatedBy?: string;
+          dirty: boolean;
+        }
+      | null
+    > = new Array(normalized.length);
     const missing: Array<{ path: string; index: number }> = [];
     for (let i = 0; i < normalized.length; i += 1) {
       const local = entries[i];
@@ -412,7 +422,8 @@ export class Wsfs extends EventTarget {
       for (let i = 0; i < missing.length; i += 1) {
         const info = remote[i];
         if (!info) {
-          throw new Error(`File not found: ${missing[i]!.path}`);
+          results[missing[i]!.index] = null;
+          continue;
         }
         await this.store.put({
           path: missing[i]!.path,

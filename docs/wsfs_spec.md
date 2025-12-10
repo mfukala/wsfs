@@ -39,7 +39,7 @@ await wsfs.sync();
 - `runWriteTaskAndSync(task, prefix?)` keeps the write lock through sync; local edits stay even if sync fails.
 - `list(prefix?)` returns `{ path, etag, encoding?, updatedBy? }[]` without local tombstones.
 - `info(path)` returns `{ etag, encoding, updatedBy? }` using cached metadata when available.
-- `readMany(paths)` / `infoMany(paths)` fetch multiple files/metadata entries in one round-trip, filling the local cache for offline use.
+- `readMany(paths)` / `infoMany(paths)` fetch multiple files/metadata entries in one round-trip, filling the local cache for offline use; missing entries resolve to `null`.
 - Conflicts emit a `CustomEvent<ConflictEventDetail>` on the `wsfs` instance (`detail` includes `path`, `localEtag`, `remoteEtag`, `updatedBy?`).
 - Optional `codec` lets callers transform payloads before storage/network; defaults to pass-through.
 - Optional `attachAuth(kind, payload)` can inject headers or extra body fields before each request (e.g., a signed `proof` field); the server’s `authorize` hook sees these fields.

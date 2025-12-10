@@ -419,6 +419,19 @@ for (const { name, factory } of persistenceFactories) {
       expect(cached[0]).to.equal("one");
     });
 
+    it("returns null entries for missing files in readMany", async () => {
+      await persistence.write("/batch/c.txt", "cached", {
+        ifMatch: "*",
+        encoding: "utf8",
+      });
+      const wsfs = await createClient(baseUrl);
+      const results = await wsfs.runReadTask((client) =>
+        client.readMany(["/batch/c.txt", "/batch/does-not-exist.txt"]),
+      );
+      expect(results[0]).to.equal("cached");
+      expect(results[1]).to.equal(null);
+    });
+
     it("fetches metadata for multiple files in batch", async () => {
       const remote = await persistence.write("/batch/info.txt", "value", {
         ifMatch: "*",
@@ -439,6 +452,23 @@ for (const { name, factory } of persistenceFactories) {
         encoding: "utf8",
         dirty: false,
       });
+    });
+
+    it("returns null entries for missing metadata in infoMany", async () => {
+      const remote = await persistence.write("/batch/info-multi.txt", "value", {
+        ifMatch: "*",
+        encoding: "utf8",
+      });
+      const wsfs = await createClient(baseUrl);
+      const [existing, missing] = await wsfs.runReadTask((client) =>
+        client.infoMany(["/batch/info-multi.txt", "/batch/nope.txt"]),
+      );
+      expect(existing).to.deep.include({
+        etag: remote.etag,
+        encoding: "utf8",
+        dirty: false,
+      });
+      expect(missing).to.equal(null);
     });
   });
 
