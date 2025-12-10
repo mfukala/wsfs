@@ -136,4 +136,31 @@ describe("server api pagination and bulk reads", () => {
     expect(persistence.listChangesCalls).to.equal(1);
     expect(persistence.listCalls).to.equal(0);
   });
+
+  it("fetches multiple files in a single batch call", async () => {
+    const first = record("/first.txt", "etag-1", "one");
+    const second = record("/second.txt", "etag-2", "two");
+    const persistence = new FakePersistence([first, second], []);
+    const api = createWsfsApi(persistence);
+    const results = await api.getFiles(
+      [first.path, "/missing.txt", second.path],
+      undefined,
+    );
+    expect(results).to.have.lengthOf(3);
+    expect(results[0]?.path).to.equal(first.path);
+    expect(results[1]).to.equal(null);
+    expect(results[2]?.path).to.equal(second.path);
+    expect(persistence.readManyCalls).to.equal(1);
+  });
+
+  it("fetches file info metadata in batches", async () => {
+    const one = record("/one.txt", "etag-1", "one");
+    const persistence = new FakePersistence([one], []);
+    const api = createWsfsApi(persistence);
+    const results = await api.getFileInfos([one.path], undefined);
+    expect(results).to.have.lengthOf(1);
+    expect(results[0]?.etag).to.equal(one.etag);
+    expect(results[0]?.encoding).to.equal("utf8");
+    expect(persistence.readManyCalls).to.equal(1);
+  });
 });

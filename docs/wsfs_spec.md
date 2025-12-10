@@ -39,6 +39,7 @@ await wsfs.sync();
 - `runWriteTaskAndSync(task, prefix?)` keeps the write lock through sync; local edits stay even if sync fails.
 - `list(prefix?)` returns `{ path, etag, encoding?, updatedBy? }[]` without local tombstones.
 - `info(path)` returns `{ etag, encoding, updatedBy? }` using cached metadata when available.
+- `readMany(paths)` / `infoMany(paths)` fetch multiple files/metadata entries in one round-trip, filling the local cache for offline use.
 - Conflicts emit a `CustomEvent<ConflictEventDetail>` on the `wsfs` instance (`detail` includes `path`, `localEtag`, `remoteEtag`, `updatedBy?`).
 - Optional `codec` lets callers transform payloads before storage/network; defaults to pass-through.
 - Optional `attachAuth(kind, payload)` can inject headers or extra body fields before each request (e.g., a signed `proof` field); the server’s `authorize` hook sees these fields.
@@ -55,6 +56,8 @@ await wsfs.sync();
 - `POST /sync` — batch push/pull (see shapes below)
 - `GET /file?path=/foo.txt` → `{ etag, encoding, updatedBy?, content|contentBase64 }`
 - `GET /file/info?path=/foo.txt` → `{ etag, encoding, updatedBy? }`
+- `POST /file/batch` + `{ paths: [string, ...] }` → `[ { etag, encoding, updatedBy?, content|contentBase64 } | null, ... ]`
+- `POST /file/info/batch` + `{ paths: [string, ...] }` → `[ { etag, encoding, updatedBy? } | null, ... ]`
 - `GET /list?prefix=/path/` → `[{ path, etag, encoding }]`
 - `PUT /file` + header `If-Match: <etag|*>` + body `{ path, content|contentBase64, encoding?, updatedBy? }` → `{ etag }`
 - `DELETE /file?path=...` + header `If-Match: <etag|*>`

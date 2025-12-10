@@ -48,6 +48,8 @@ type AttachAuthKind =
   | "sync"
   | "getFile"
   | "getFileInfo"
+  | "getFiles"
+  | "getFileInfos"
   | "putFile"
   | "deleteFile"
   | "list";
@@ -56,6 +58,8 @@ type AttachAuthPayloadMap = {
   sync: { headers: Record<string, string>; body: SyncRequestPayload };
   getFile: { headers: Record<string, string>; path: string };
   getFileInfo: { headers: Record<string, string>; path: string };
+  getFiles: { headers: Record<string, string>; paths: string[] };
+  getFileInfos: { headers: Record<string, string>; paths: string[] };
   putFile: { headers: Record<string, string>; body: SyncWritePayload };
   deleteFile: { headers: Record<string, string>; body: SyncDeletePayload };
   list: { headers: Record<string, string>; prefix: string };
@@ -94,6 +98,7 @@ export interface ConflictEventDetail {
 /** Operations available inside a read task. */
 export interface ReadTaskClient {
   read(path: string): Promise<string | Uint8Array>;
+  readMany(paths: string[]): Promise<Array<string | Uint8Array>>;
   list(prefix?: string): Promise<ListEntry[]>;
   info(
     path: string,
@@ -103,6 +108,16 @@ export interface ReadTaskClient {
     updatedBy?: string;
     dirty: boolean;
   }>;
+  infoMany(
+    paths: string[],
+  ): Promise<
+    Array<{
+      etag: string | undefined;
+      encoding: "utf8" | "base64";
+      updatedBy?: string;
+      dirty: boolean;
+    }>
+  >;
 }
 
 /** Operations available inside a write task. */
@@ -206,6 +221,49 @@ export class Wsfs extends EventTarget {
       content: remote.content,
       encoding: remote.encoding,
     });
+  }
+
+  private async readMany(
+    paths: string[],
+    guard: TaskGuard,
+  ): Promise<Array<string | Uint8Array>> {
+    this.assertTaskGuard(guard, false);
+    if (!paths.length) {
+      return [];
+    }
+    const normalized = paths.map((path) => this.normalizePath(path));
+    const entries = await Promise.all(normalized.map((path) => this.store.get(path)));
+    const results: Array<string | Uint8Array> = new Array(normalized.length);
+    const missing: Array<{ path: string; index: number }> = [];
+    for (let i = 0; i < normalized.length; i += 1) {
+      const entry = entries[i];
+      if (entry && !entry.deleted) {
+        results[i] = await this.decodeStoredContent(entry);
+      } else {
+        missing.push({ path: normalized[i], index: i });
+      }
+    }
+    if (missing.length) {
+      const remote = await this.fetchFilesBatch(missing.map((item) => item.path));
+      for (let i = 0; i < missing.length; i += 1) {
+        const record = remote[i];
+        if (!record) {
+          throw new Error(`File not found: ${missing[i]!.path}`);
+        }
+        const decoded = this.decodeRemoteContent(record);
+        await this.store.put({
+          path: record.path,
+          content: decoded.content,
+          encoding: decoded.encoding,
+          etag: record.etag,
+          updatedBy: record.updatedBy,
+          dirty: false,
+          deleted: false,
+        });
+        results[missing[i]!.index] = decoded.content;
+      }
+    }
+    return results;
   }
 
   private async write(
@@ -312,6 +370,67 @@ export class Wsfs extends EventTarget {
     };
   }
 
+  private async infoMany(
+    paths: string[],
+    guard: TaskGuard,
+  ): Promise<
+    Array<{
+      etag: string | undefined;
+      encoding: "utf8" | "base64";
+      updatedBy?: string;
+      dirty: boolean;
+    }>
+  > {
+    this.assertTaskGuard(guard, false);
+    if (!paths.length) {
+      return [];
+    }
+    const normalized = paths.map((path) => this.normalizePath(path));
+    const entries = await Promise.all(normalized.map((path) => this.store.get(path)));
+    const results: Array<{
+      etag: string | undefined;
+      encoding: "utf8" | "base64";
+      updatedBy?: string;
+      dirty: boolean;
+    }> = new Array(normalized.length);
+    const missing: Array<{ path: string; index: number }> = [];
+    for (let i = 0; i < normalized.length; i += 1) {
+      const local = entries[i];
+      if (local && !local.deleted && local.encoding) {
+        results[i] = {
+          etag: local.etag,
+          encoding: local.encoding,
+          updatedBy: local.updatedBy,
+          dirty: !!local.dirty,
+        };
+      } else {
+        missing.push({ path: normalized[i], index: i });
+      }
+    }
+    if (missing.length) {
+      const remote = await this.fetchFileInfosBatch(missing.map((item) => item.path));
+      for (let i = 0; i < missing.length; i += 1) {
+        const info = remote[i];
+        if (!info) {
+          throw new Error(`File not found: ${missing[i]!.path}`);
+        }
+        await this.store.put({
+          path: missing[i]!.path,
+          etag: info.etag,
+          encoding: info.encoding,
+          updatedBy: info.updatedBy,
+          dirty: false,
+          deleted: false,
+        });
+        results[missing[i]!.index] = {
+          ...info,
+          dirty: false,
+        };
+      }
+    }
+    return results;
+  }
+
   async sync(prefix = "/"): Promise<void> {
     const normalized = this.normalizePath(prefix, true);
     const dirtyEntries = await this.store.listDirty();
@@ -383,6 +502,54 @@ export class Wsfs extends EventTarget {
       content: decoded.content,
       encoding: decoded.encoding,
     };
+  }
+
+  private async fetchFilesBatch(paths: string[]): Promise<Array<RemoteRecord | null>> {
+    if (!paths.length) {
+      return [];
+    }
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    await this.applyAttachAuth("getFiles", { headers, paths });
+    headers["Content-Type"] ??= "application/json";
+    const response = await this.backendFetch("/file/batch", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ paths }),
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to fetch files (${response.status})`);
+    }
+    return (await response.json()) as Array<RemoteRecord | null>;
+  }
+
+  private async fetchFileInfosBatch(
+    paths: string[],
+  ): Promise<
+    Array<{
+      etag: string;
+      encoding: "utf8" | "base64";
+      updatedBy?: string;
+    } | null>
+  > {
+    if (!paths.length) {
+      return [];
+    }
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    await this.applyAttachAuth("getFileInfos", { headers, paths });
+    headers["Content-Type"] ??= "application/json";
+    const response = await this.backendFetch("/file/info/batch", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ paths }),
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to fetch file info (${response.status})`);
+    }
+    return (await response.json()) as Array<{
+      etag: string;
+      encoding: "utf8" | "base64";
+      updatedBy?: string;
+    } | null>;
   }
 
   private async applyWriteResults(
@@ -784,8 +951,10 @@ export class Wsfs extends EventTarget {
   private createReadClient(guard: TaskGuard): ReadTaskClient {
     return {
       read: (path: string) => this.read(path, guard),
+      readMany: (paths: string[]) => this.readMany(paths, guard),
       list: (prefix?: string) => this.list(prefix ?? "/", guard),
       info: (path: string) => this.info(path, guard),
+      infoMany: (paths: string[]) => this.infoMany(paths, guard),
     };
   }
 

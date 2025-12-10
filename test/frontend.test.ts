@@ -398,6 +398,50 @@ for (const { name, factory } of persistenceFactories) {
     });
   });
 
+  describe("batch operations", () => {
+    it("reads multiple files with a single remote call and caches them", async () => {
+      await persistence.write("/batch/a.txt", "one", {
+        ifMatch: "*",
+        encoding: "utf8",
+      });
+      await persistence.write("/batch/b.txt", "two", {
+        ifMatch: "*",
+        encoding: "utf8",
+      });
+      const wsfs = await createClient(baseUrl);
+      const results = await wsfs.runReadTask((client) =>
+        client.readMany(["/batch/a.txt", "/batch/b.txt"]),
+      );
+      expect(results).to.deep.equal(["one", "two"]);
+      await stopServer(server);
+      server = null;
+      const cached = await wsfs.runReadTask((client) => client.readMany(["/batch/a.txt"]));
+      expect(cached[0]).to.equal("one");
+    });
+
+    it("fetches metadata for multiple files in batch", async () => {
+      const remote = await persistence.write("/batch/info.txt", "value", {
+        ifMatch: "*",
+        encoding: "utf8",
+      });
+      const wsfs = await createClient(baseUrl);
+      const [info] = await wsfs.runReadTask((client) => client.infoMany(["/batch/info.txt"]));
+      expect(info).to.deep.include({
+        etag: remote.etag,
+        encoding: "utf8",
+        dirty: false,
+      });
+      await stopServer(server);
+      server = null;
+      const cached = await wsfs.runReadTask((client) => client.infoMany(["/batch/info.txt"]));
+      expect(cached[0]).to.deep.include({
+        etag: remote.etag,
+        encoding: "utf8",
+        dirty: false,
+      });
+    });
+  });
+
   describe("conflict handling", () => {
     it("emits conflict events when remote etag mismatches", async () => {
       const seeded = await persistence.write("/notes/item.txt", "v1", {

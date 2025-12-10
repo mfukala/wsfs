@@ -53,7 +53,7 @@ await wsfs.sync();
 ```
 
 - `runWriteTaskAndSync` keeps the write lock through the sync; local edits rollback only if the task throws, not if sync fails.
-- `list(prefix?)` hides local tombstones; `info(path)` returns `{ etag, encoding, updatedBy? }`.
+- `list(prefix?)` hides local tombstones; `info(path)` returns `{ etag, encoding, updatedBy? }`. Use `readMany(paths)` / `infoMany(paths)` inside read tasks to fetch multiple files/metadata in one round-trip and cache the results.
 - Conflicts surface via a `conflict` event:
 
 ```ts
@@ -139,6 +139,24 @@ app.get("/file/info", async (req, res) => {
   res.json(info);
 });
 
+app.post("/file/batch", async (req, res) => {
+  try {
+    const paths = Array.isArray(req.body?.paths) ? req.body.paths : [];
+    res.json(await api.getFiles(paths, { headers: req.headers }));
+  } catch (err: any) {
+    res.status(err?.status ?? 500).json({ error: err?.message ?? "getFiles failed" });
+  }
+});
+
+app.post("/file/info/batch", async (req, res) => {
+  try {
+    const paths = Array.isArray(req.body?.paths) ? req.body.paths : [];
+    res.json(await api.getFileInfos(paths, { headers: req.headers }));
+  } catch (err: any) {
+    res.status(err?.status ?? 500).json({ error: err?.message ?? "getFileInfos failed" });
+  }
+});
+
 app.get("/list", async (req, res) => {
   res.json(await api.list(String(req.query.prefix ?? "/"), { headers: req.headers }));
 });
@@ -200,7 +218,7 @@ export default async function handler(req, res) {
 }
 ```
 
-Reuse the same pattern for `/file`, `/file/info`, and `/list`, passing the request payloads into `api.putFile`, `api.getFile`, `api.getFileInfo`, and `api.list` while preserving the `If-Match` header for writes/deletes. `authorize(kind, payload)` runs before persistence and may throw with `status` (401/403/400) to block the request; `partition(ctx)` can select a tenant and falls back to the adapter’s baked-in partition when undefined.
+Reuse the same pattern for `/file`, `/file/info`, `/file/batch`, `/file/info/batch`, and `/list`, passing the request payloads into `api.putFile`, `api.getFile`, `api.getFileInfo`, `api.getFiles`, `api.getFileInfos`, and `api.list` while preserving the `If-Match` header for writes/deletes. `authorize(kind, payload)` runs before persistence and may throw with `status` (401/403/400) to block the request; `partition(ctx)` can select a tenant and falls back to the adapter’s baked-in partition when undefined.
 
 Example signature check inside `authorize`:
 
@@ -226,6 +244,8 @@ const api = createWsfsApi(persistence, {
 - `POST /sync` with `{ prefix, writes, deletes, known, watermark }`
 - `GET /file?path=/foo.txt` → `{ etag, encoding, updatedBy?, content|contentBase64 }`
 - `GET /file/info?path=/foo.txt` → `{ etag, encoding, updatedBy? }`
+- `POST /file/batch` + body `{ paths: ["/foo.txt", "/bar.txt"] }` → `[EncodedRecord | null, ...]`
+- `POST /file/info/batch` + body `{ paths: ["/foo.txt"] }` → `[{ etag, encoding, updatedBy? } | null, ...]`
 - `GET /list?prefix=/dir/` → `[{ path, etag, encoding }]`
 - `PUT /file` + `If-Match: <etag|*>` → `{ etag }`
 - `DELETE /file?path=...` + `If-Match: <etag|*>`

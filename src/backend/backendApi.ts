@@ -49,6 +49,8 @@ type AuthorizePayload = {
   deleteFile: { body: DeletePayload; headers?: RequestHeaders };
   getFile: { path: string; headers?: RequestHeaders };
   getFileInfo: { path: string; headers?: RequestHeaders };
+  getFiles: { paths: string[]; headers?: RequestHeaders };
+  getFileInfos: { paths: string[]; headers?: RequestHeaders };
   list: { prefix: string; headers?: RequestHeaders };
 };
 
@@ -82,6 +84,12 @@ export type EncodedRecord = {
   content?: string;
   /** Present when `encoding === "base64"`. */
   contentBase64?: string;
+};
+
+type FileInfoRecord = {
+  etag: string;
+  encoding: "utf8" | "base64";
+  updatedBy?: string;
 };
 
 /**
@@ -175,6 +183,28 @@ export interface WsfsBackendApi {
     updatedBy?: string;
   } | null>;
   /**
+   * Batch read file contents. Items are returned in the same order as requested,
+   * with `null` entries for missing files.
+   */
+  getFiles(
+    paths: string[],
+    context?: RequestContext,
+  ): Promise<Array<EncodedRecord | null>>;
+  /**
+   * Batch read file metadata. Items are returned in the same order as requested,
+   * with `null` entries for missing files.
+   */
+  getFileInfos(
+    paths: string[],
+    context?: RequestContext,
+  ): Promise<
+    Array<{
+      etag: string;
+      encoding: "utf8" | "base64";
+      updatedBy?: string;
+    } | null>
+  >;
+  /**
    * Create/update a file with optimistic concurrency via `ifMatch`.
    * Throws `BadRequestError` on missing `path`/content, and propagates
    * persistence errors (`MissingPreconditionError`, `EtagMismatchError`).
@@ -227,6 +257,22 @@ export function createWsfsApi(
         "getFileInfo",
         { path, headers: context?.headers },
         (scoped) => getFileInfo(scoped, path),
+      ),
+    getFiles: (paths, context) =>
+      withHooks(
+        persistence,
+        options,
+        "getFiles",
+        { paths, headers: context?.headers },
+        (scoped) => getFilesBatch(scoped, paths),
+      ),
+    getFileInfos: (paths, context) =>
+      withHooks(
+        persistence,
+        options,
+        "getFileInfos",
+        { paths, headers: context?.headers },
+        (scoped) => getFileInfosBatch(scoped, paths),
       ),
     putFile: (input, context) =>
       withHooks(
@@ -476,11 +522,7 @@ async function getFile(
 async function getFileInfo(
   persistence: PersistenceAdapter,
   targetPath: string,
-): Promise<{
-  etag: string;
-  encoding: "utf8" | "base64";
-  updatedBy?: string;
-} | null> {
+): Promise<FileInfoRecord | null> {
   const record = await getFile(persistence, targetPath);
   if (!record) {
     return null;
@@ -490,6 +532,32 @@ async function getFileInfo(
     encoding: record.encoding,
     updatedBy: record.updatedBy,
   };
+}
+
+async function getFilesBatch(
+  persistence: PersistenceAdapter,
+  paths: string[],
+): Promise<Array<EncodedRecord | null>> {
+  assertValidBatchPaths(paths);
+  const records = await readRecords(persistence, paths);
+  return records.map((record) => (record ? encodeRecord(record) : null));
+}
+
+async function getFileInfosBatch(
+  persistence: PersistenceAdapter,
+  paths: string[],
+): Promise<Array<FileInfoRecord | null>> {
+  assertValidBatchPaths(paths);
+  const records = await readRecords(persistence, paths);
+  return records.map((record) =>
+    record
+      ? {
+          etag: record.etag,
+          encoding: record.encoding,
+          updatedBy: record.updatedBy,
+        }
+      : null,
+  );
 }
 
 async function putFile(
@@ -580,16 +648,23 @@ async function fetchMany(
   if (!paths.length) {
     return [];
   }
-  if (persistence.readMany) {
-    const records = await persistence.readMany(paths);
-    return records
-      .map((record) => (record ? encodeRecord(record) : null))
-      .filter((record): record is EncodedRecord => !!record);
-  }
-  const records = await Promise.all(paths.map((pathItem) => persistence.read(pathItem)));
+  const records = await readRecords(persistence, paths);
   return records
     .map((record) => (record ? encodeRecord(record) : null))
     .filter((record): record is EncodedRecord => !!record);
+}
+
+async function readRecords(
+  persistence: PersistenceAdapter,
+  paths: string[],
+): Promise<Array<FileRecord | null>> {
+  if (!paths.length) {
+    return [];
+  }
+  if (persistence.readMany) {
+    return persistence.readMany(paths);
+  }
+  return Promise.all(paths.map((pathItem) => persistence.read(pathItem)));
 }
 
 function normalizeListResult(
@@ -602,6 +677,17 @@ function normalizeListResult(
     items: result.items,
     cursor: result.cursor ?? null,
   };
+}
+
+function assertValidBatchPaths(paths: string[] | unknown): asserts paths is string[] {
+  if (!Array.isArray(paths) || paths.length === 0) {
+    throw new BadRequestError("No paths provided");
+  }
+  for (const path of paths) {
+    if (typeof path !== "string" || !path) {
+      throw new BadRequestError("Missing path");
+    }
+  }
 }
 
 function decodeIncomingContent(
